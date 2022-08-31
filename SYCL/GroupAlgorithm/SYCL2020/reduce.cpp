@@ -16,14 +16,20 @@
 #include <sycl/sycl.hpp>
 using namespace sycl;
 
-template <typename SpecializationKernelName, typename InputContainer,
-          typename OutputContainer, class BinaryOperation>
+template <typename T> bool approx_eq(T a, T b) {
+  return std::abs(a - b) / (0.5 * std::abs(a + b)) < 1e-6;
+}
+
+template <> bool approx_eq<int>(int a, int b) { return a == b; }
+
+template <typename InputContainer, typename OutputContainer,
+          class BinaryOperation>
 void test(queue q, InputContainer input, OutputContainer output,
           BinaryOperation binary_op,
           typename OutputContainer::value_type identity) {
   typedef typename InputContainer::value_type InputT;
   typedef typename OutputContainer::value_type OutputT;
-  OutputT init = 42;
+  OutputT init = OutputT(42);
   size_t N = input.size();
   size_t G = 64;
   {
@@ -33,7 +39,7 @@ void test(queue q, InputContainer input, OutputContainer output,
     q.submit([&](handler &cgh) {
       accessor in{in_buf, cgh, sycl::read_only};
       accessor out{out_buf, cgh, sycl::write_only, sycl::no_init};
-      cgh.parallel_for<SpecializationKernelName>(
+      cgh.parallel_for(
           nd_range<1>(G, G), [=](nd_item<1> it) {
             group<1> g = it.get_group();
             int lid = it.get_local_id(0);
@@ -47,14 +53,14 @@ void test(queue q, InputContainer input, OutputContainer output,
     });
   }
   // std::reduce is not implemented yet, so use std::accumulate instead
-  assert(output[0] == std::accumulate(input.begin(), input.begin() + G,
-                                      identity, binary_op));
-  assert(output[1] ==
-         std::accumulate(input.begin(), input.begin() + G, init, binary_op));
-  assert(output[2] ==
-         std::accumulate(input.begin(), input.end(), identity, binary_op));
-  assert(output[3] ==
-         std::accumulate(input.begin(), input.end(), init, binary_op));
+  assert(approx_eq(output[0], std::accumulate(input.begin(), input.begin() + G,
+                                              identity, binary_op)));
+  assert(approx_eq(output[1], std::accumulate(input.begin(), input.begin() + G,
+                                              init, binary_op)));
+  assert(approx_eq(output[2], std::accumulate(input.begin(), input.end(),
+                                              identity, binary_op)));
+  assert(approx_eq(
+      output[3], std::accumulate(input.begin(), input.end(), init, binary_op)));
 }
 
 int main() {
@@ -70,25 +76,44 @@ int main() {
   std::iota(input.begin(), input.end(), 0);
   std::fill(output.begin(), output.end(), 0);
 
-  test<class KernelNamePlusV>(q, input, output, sycl::plus<>(), 0);
-  test<class KernelNameMinimumV>(q, input, output, sycl::minimum<>(),
-                                 std::numeric_limits<int>::max());
-  test<class KernelNameMaximumV>(q, input, output, sycl::maximum<>(),
-                                 std::numeric_limits<int>::lowest());
+  test(q, input, output, sycl::plus<>(), 0);
+  test(q, input, output, sycl::minimum<>(), std::numeric_limits<int>::max());
+  test(q, input, output, sycl::maximum<>(), std::numeric_limits<int>::lowest());
 
-  test<class KernelNamePlusI>(q, input, output, sycl::plus<int>(), 0);
-  test<class KernelNameMinimumI>(q, input, output, sycl::minimum<int>(),
-                                 std::numeric_limits<int>::max());
-  test<class KernelNameMaximumI>(q, input, output, sycl::maximum<int>(),
-                                 std::numeric_limits<int>::lowest());
+  test(q, input, output, sycl::plus<int>(), 0);
+  test(q, input, output, sycl::minimum<int>(), std::numeric_limits<int>::max());
+  test(q, input, output, sycl::maximum<int>(),
+       std::numeric_limits<int>::lowest());
 
-  test<class KernelName_WonwuUVPUPOTKRKIBtT>(q, input, output,
-                                             sycl::multiplies<int>(), 1);
-  test<class KernelName_qYBaJDZTMGkdIwD>(q, input, output, sycl::bit_or<int>(),
-                                         0);
-  test<class KernelName_eLSFt>(q, input, output, sycl::bit_xor<int>(), 0);
-  test<class KernelName_uFhJnxSVhNAiFPTG>(q, input, output,
-                                          sycl::bit_and<int>(), ~0);
+  test(q, input, output, sycl::multiplies<int>(), 1);
+  test(q, input, output, sycl::bit_or<int>(), 0);
+  test(q, input, output, sycl::bit_xor<int>(), 0);
+  test(q, input, output, sycl::bit_and<int>(), ~0);
+
+  std::array<std::complex<float>, N> cf_input;
+  std::array<std::complex<float>, N> cf_output;
+  for (int i = 0; i < N; i++) {
+    cf_input[i] = {(i % 2) + 1.0f, (i % 3) - 1.f};
+  }
+  std::fill(cf_output.begin(), cf_output.end(), 0);
+  test(q, cf_input, cf_output, sycl::multiplies<std::complex<float>>(), 1);
+
+  std::array<std::complex<double>, N> cd_input;
+  std::array<std::complex<double>, N> cd_output;
+  for (int i = 0; i < N; i++) {
+    cd_input[i] = {(i % 2) + 1.0f, (i % 3) - 1.f};
+  }
+  std::fill(cd_output.begin(), cd_output.end(), 0);
+  test(q, cd_input, cd_output, sycl::multiplies<std::complex<double>>(), 1);
+
+  std::array<std::complex<half>, N> ch_input;
+  std::array<std::complex<half>, N> ch_output;
+  for (int i = 0; i < N; i++) {
+    ch_input[i] = {(i % 2) + 1.0f, (i % 3) - 1.f};
+  }
+  std::fill(ch_output.begin(), ch_output.end(), half(0));
+  test(q, ch_input, ch_output, sycl::multiplies<std::complex<half>>(),
+       half(1.f));
 
   std::cout << "Test passed." << std::endl;
 }
